@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib/common.sh
+source "$ROOT/lib/common.sh"
+
+usage() {
+  cat <<USAGE
+Usage: backpack-lid <arm|disarm|status|toggle>
+
+  arm     Arm one lid-close session (blank screen, no sleep). Auto-disarm on open.
+  disarm  Cancel and restore normal behavior.
+  status  Print state (and JSON line).
+  toggle  Arm if idle, else disarm.
+USAGE
+}
+
+cmd_status() {
+  ensure_state_dir
+  local state watcher inhibit lid
+  state="$(read_state)"
+  watcher="$(read_pid_file "$WATCHER_PID_FILE")"
+  inhibit="$(read_pid_file "$INHIBIT_PID_FILE")"
+  lid="$(read_lid || echo unknown)"
+
+  # Heal stale state if watcher died
+  if [[ "$state" != "idle" ]] && ! pid_alive "$watcher"; then
+    state="idle"
+    write_state "idle"
+    stop_inhibit_safe
+    watcher=""
+    inhibit=""
+  fi
+
+  printf 'state=%s lid=%s watcher_pid=%s inhibit_pid=%s\n' \
+    "$state" "$lid" "${watcher:-none}" "${inhibit:-none}"
+  printf '{"state":"%s","lid":"%s","watcher_pid":"%s","inhibit_pid":"%s"}\n' \
+    "$state" "$lid" "${watcher:-}" "${inhibit:-}"
+}
+
+stop_inhibit_safe() {
+  kill_pid_file "$INHIBIT_PID_FILE"
+}
+
+cmd_disarm() {
+  ensure_state_dir
+  kill_pid_file "$WATCHER_PID_FILE"
+  stop_inhibit_safe
+  dpms_on
+  write_state "idle"
+  echo "disarmed"
+  cmd_status
+}
+
+cmd_arm() {
+  ensure_state_dir
+  local st
+  st="$(read_state)"
+  if [[ "$st" == "armed" || "$st" == "active" ]] && pid_alive "$(read_pid_file "$WATCHER_PID_FILE")"; then
+    echo "already $st"
+    cmd_status
+    return 0
+  fi
+  # Clean any stale bits then start watcher
+  kill_pid_file "$WATCHER_PID_FILE"
+  stop_inhibit_safe
+  write_state "armed"
+  nohup "$ROOT/lib/watcher.sh" >/dev/null 2>&1 &
+  disown || true
+  sleep 0.2
+  echo "armed"
+  cmd_status
+}
+
+cmd_toggle() {
+  local st
+  st="$(read_state)"
+  if [[ "$st" == "idle" ]]; then
+    cmd_arm
+  else
+    cmd_disarm
+  fi
+}
+
+main() {
+  local cmd="${1:-}"
+  case "$cmd" in
+    arm) cmd_arm ;;
+    disarm) cmd_disarm ;;
+    status) cmd_status ;;
+    toggle) cmd_toggle ;;
+    -h|--help|help) usage ;;
+    *) usage; exit 2 ;;
+  esac
+}
+
+main "$@"
