@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 # Background lid watcher for backpack-lid (one session).
 set -euo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+_src="${BASH_SOURCE[0]}"
+while [[ -L "$_src" ]]; do
+  _dir="$(cd -P "$(dirname "$_src")" && pwd)"
+  _src="$(readlink "$_src")"
+  [[ "$_src" != /* ]] && _src="$_dir/$_src"
+done
+ROOT="$(cd "$(dirname "$_src")/.." && pwd)"
+unset _src _dir
 # shellcheck source=lib/common.sh
 source "$ROOT/lib/common.sh"
 
